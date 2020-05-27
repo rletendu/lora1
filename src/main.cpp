@@ -19,7 +19,7 @@
  *******************************************************************************/
 #include <Arduino.h>
 //oled display heltec
-//#define OLED
+#define OLED
 
 #include <lmic.h>
 #include <hal/hal.h>
@@ -52,11 +52,11 @@ void do_send(osjob_t* j);
 // Necessaire pour le protocole mais inutile pour l'implémentation dans loraserver
 // On peut donc mettre de l'aléatoire ou :
 
-static const u1_t APPEUI[8]={ 0x70, 0xB3, 0xD5, 0x7E, 0xD0, 0x02, 0xF1, 0x8B };
+static const u1_t APPEUI[8]={ 0xE4, 0x7C, 0x69, 0xD7, 0x17, 0xE8, 0xCF, 0x00 };
 
 // DEVEUI should also be in *little endian format*
 
-static const u1_t DEVEUI[8]={ 0x00, 0xCF, 0xE8, 0x17, 0xD7, 0x69, 0x7C, 0xE4 };
+static const u1_t DEVEUI[8]={ 0x8B, 0xF1, 0x02, 0xD0, 0x7E, 0xD5, 0xB3, 0x70 };
 
 // This key should be in big endian format
 
@@ -83,9 +83,9 @@ const lmic_pinmap lmic_pins = {
     .rxtx = LMIC_UNUSED_PIN,
     .rst = 23,
     //If DIO2 is not wired use:
-    .dio = {/*dio0*/ 26, /*dio1*/ 33, /*dio2*/ LMIC_UNUSED_PIN} 
+    //.dio = {/*dio0*/ 26, /*dio1*/ 33, /*dio2*/ LMIC_UNUSED_PIN} 
     //If DIO2 is wired use:
-    //.dio = {/*dio0*/ 26, /*dio1*/ 33, /*dio2*/ 32} 
+    .dio = {/*dio0*/ 26, /*dio1*/ 33, /*dio2*/ 32} 
 };
 
 /******************************************************************************/
