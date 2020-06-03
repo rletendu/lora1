@@ -76,11 +76,26 @@ static osjob_t sendjob;
 const unsigned TX_INTERVAL = 60;
 
 // Pin mapping
+//For TTGO LoRa32 V2.1:
+//The first revision(s) does not have LoRa RST connected to GPIO, use as V2 above.
+//Revision V1.5 (V1.5 marked on PCB) uses GPIO12 for LoRa RST.
+//Revision(s) newer than V1.5 use GPIO19 for LoRa RST.
+//Note: On first revision(s) DIO1 and DIO2 are not on-board wired to any GPIO and have to be wired manually.
+//Later revisions may have these wired on-board already.
+
 const lmic_pinmap lmic_pins = {
-    .nss = 6,
+    .nss = 18, 
     .rxtx = LMIC_UNUSED_PIN,
-    .rst = 5,
-    .dio = {2, 3, 4},
+
+    //For board revision V1.5 use GPIO12 for LoRa RST
+    //.rst = 12,
+    //For board revision(s) newer than V1.5 use GPIO19 for LoRa RST
+    .rst = 19,
+
+    //If DIO2 is not connected use:
+    //.dio = {/*dio0*/ 26, /*dio1*/ 33, /*dio2*/ LMIC_UNUSED_PIN} 
+    //If DIO2 is connected use:
+    .dio = {/*dio0*/ 26, /*dio1*/ 33, /*dio2*/ 32} 
 };
 
 void printHex2(unsigned v) {
