@@ -1,105 +1,94 @@
 /*******************************************************************************
  * Copyright (c) 2015 Thomas Telkamp and Matthijs Kooijman
- * Modifié par NG et RB (IUT de Blagnac)
- * Modifié par yves (LinuxTarn)
- * Modifié par Brice (AlbiLab)
+ * Copyright (c) 2018 Terry Moore, MCCI
+ *
+ * Permission is hereby granted, free of charge, to anyone
+ * obtaining a copy of this document and accompanying files,
+ * to do whatever they want with them without any restriction,
+ * including, but not limited to, copying, modification and redistribution.
+ * NO WARRANTY OF ANY KIND IS PROVIDED.
+ *
+ * This example sends a valid LoRaWAN packet with payload "Hello,
+ * world!", using frequency and encryption settings matching those of
+ * the The Things Network.
  *
  * This uses OTAA (Over-the-air activation), where where a DevEUI and
  * application key is configured, which are used in an over-the-air
  * activation procedure where a DevAddr and session keys are
  * assigned/generated for use with all further communication.
  *
+ * Note: LoRaWAN per sub-band duty-cycle limitation is enforced (1% in
+ * g1, 0.1% in g2), but not the TTN fair usage policy (which is probably
+ * violated by this sketch when left running for longer)!
+
  * To use this sketch, first register your application and device with
- * the tloraserver, to set or generate an AppEUI, DevEUI and AppKey.
+ * the things network, to set or generate an AppEUI, DevEUI and AppKey.
  * Multiple devices can use the same AppEUI, but each device has its own
  * DevEUI and AppKey.
  *
- * Do not forget to define the radio type correctly in config.h.
+ * Do not forget to define the radio type correctly in
+ * arduino-lmic/project_config/lmic_project_config.h or from your BOARDS.txt.
  *
  *******************************************************************************/
 #include <Arduino.h>
-//oled display heltec
-#define OLED
-
 #include <lmic.h>
 #include <hal/hal.h>
 #include <SPI.h>
 
-
 void do_send(osjob_t* j);
 
-#if defined OLED
-  #include <U8x8lib.h>
-  U8X8_SSD1306_128X64_NONAME_SW_I2C u8x8(/* clock=*/ 15, /* data=*/ 4, /* reset=*/ 16);
-  void dispOled(int x, int y, char *text, boolean cls=true)
-  {
-    if (cls)
-      u8x8.clear();
-    u8x8.drawString(x, y, text);
-  }
+//
+// For normal use, we require that you edit the sketch to replace FILLMEIN
+// with values assigned by the TTN console. However, for regression tests,
+// we want to be able to compile these scripts. The regression tests define
+// COMPILE_REGRESSION_TEST, and in that case we define FILLMEIN to a non-
+// working but innocuous value.
+//
+#ifdef COMPILE_REGRESSION_TEST
+# define FILLMEIN 0
+#else
+# warning "You must replace the values marked FILLMEIN with real values from the TTN control panel!"
+# define FILLMEIN (#dont edit this, edit the lines that use FILLMEIN)
 #endif
 
-
-#if defined(ARDUINO_SAMD_ZERO) && defined(SERIAL_PORT_USBVIRTUAL)
-  // Required for Serial on Zero based boards
-  #define Serial SERIAL_PORT_USBVIRTUAL
-#endif
-/******************************************************************************/
-/* LoRaWAN                                                                    */
-/******************************************************************************/
-
-// This EUI must be in *little-endian format* (least-significant-byte first)
-// Necessaire pour le protocole mais inutile pour l'implémentation dans loraserver
-// On peut donc mettre de l'aléatoire ou :
-
-static const u1_t APPEUI[8]={ 0xE4, 0x7C, 0x69, 0xD7, 0x17, 0xE8, 0xCF, 0x00 };
-
-// DEVEUI should also be in *little endian format*
-
-static const u1_t DEVEUI[8]={ 0x8B, 0xF1, 0x02, 0xD0, 0x7E, 0xD5, 0xB3, 0x70 };
-
-// This key should be in big endian format
-
-static const u1_t APPKEY[16] = { 0x78, 0x67, 0x1A, 0x99, 0x0B, 0xC3, 0x35, 0x49, 0x9B, 0xE0, 0x81, 0x74, 0x4C, 0xFA, 0xE2, 0x84 };
-
-// Copie en mémoire des EUI et APPKEY
+// This EUI must be in little-endian format, so least-significant-byte
+// first. When copying an EUI from ttnctl output, this means to reverse
+// the bytes. For TTN issued EUIs the last bytes should be 0xD5, 0xB3,
+// 0x70.
+static const u1_t PROGMEM APPEUI[8]={ 0x8B, 0xF1, 0x02, 0xD0, 0x7E, 0xD5, 0xB3, 0x70 };
 void os_getArtEui (u1_t* buf) { memcpy_P(buf, APPEUI, 8);}
+
+// This should also be in little endian format, see above.
+static const u1_t PROGMEM DEVEUI[8]={ 0xE4, 0x7C, 0x69, 0xD7, 0x17, 0xE8, 0xCF, 0x00 };
 void os_getDevEui (u1_t* buf) { memcpy_P(buf, DEVEUI, 8);}
-void os_getDevKey (u1_t* buf) { memcpy_P(buf, APPKEY, 16);}
+
+// This key should be in big endian format (or, since it is not really a
+// number but a block of memory, endianness does not really apply). In
+// practice, a key taken from ttnctl can be copied as-is.
+static const u1_t PROGMEM APPKEY[16] = { 0x78, 0x67, 0x1A, 0x99, 0x0B, 0xC3, 0x35, 0x49, 0x9B, 0xE0, 0x81, 0x74, 0x4C, 0xFA, 0xE2, 0x84 };
+void os_getDevKey (u1_t* buf) {  memcpy_P(buf, APPKEY, 16);}
+
+static uint8_t mydata[] = "Hello, world!";
+static osjob_t sendjob;
 
 // Schedule TX every this many seconds (might become longer due to duty
 // cycle limitations).
 const unsigned TX_INTERVAL = 60;
 
-/******************************************************************************/
-/* pin mapping                                                                */
-/******************************************************************************/
-
-//For TTGO LoRa32 V2.1.6:
-//If not already wired on PCB: do not forget to manually wire DIO1 to GPIO33.
-
+// Pin mapping
 const lmic_pinmap lmic_pins = {
-    .nss = 18, 
+    .nss = 6,
     .rxtx = LMIC_UNUSED_PIN,
-    .rst = 23,
-    //If DIO2 is not wired use:
-    //.dio = {/*dio0*/ 26, /*dio1*/ 33, /*dio2*/ LMIC_UNUSED_PIN} 
-    //If DIO2 is wired use:
-    .dio = {/*dio0*/ 26, /*dio1*/ 33, /*dio2*/ 32} 
+    .rst = 5,
+    .dio = {2, 3, 4},
 };
 
-/******************************************************************************/
-/* payload                                                                    */
-/******************************************************************************/
-
-static uint8_t mydata[] = "loraData";
-
-/******************************************************************************/
-/* Automate LMIC                                                              */
-/******************************************************************************/
-
-
-static osjob_t sendjob;
+void printHex2(unsigned v) {
+    v &= 0xff;
+    if (v < 16)
+        Serial.print('0');
+    Serial.print(v, HEX);
+}
 
 void onEvent (ev_t ev) {
     Serial.print(os_getTime());
@@ -119,39 +108,60 @@ void onEvent (ev_t ev) {
             break;
         case EV_JOINING:
             Serial.println(F("EV_JOINING"));
-            #if defined OLED
-              dispOled(0, 0, "Joining..");
-            #endif
             break;
         case EV_JOINED:
             Serial.println(F("EV_JOINED"));
-            #if defined OLED
-              dispOled(0, 0, "Joined :).");
-            #endif
+            {
+              u4_t netid = 0;
+              devaddr_t devaddr = 0;
+              u1_t nwkKey[16];
+              u1_t artKey[16];
+              LMIC_getSessionKeys(&netid, &devaddr, nwkKey, artKey);
+              Serial.print("netid: ");
+              Serial.println(netid, DEC);
+              Serial.print("devaddr: ");
+              Serial.println(devaddr, HEX);
+              Serial.print("AppSKey: ");
+              for (size_t i=0; i<sizeof(artKey); ++i) {
+                if (i != 0)
+                  Serial.print("-");
+                printHex2(artKey[i]);
+              }
+              Serial.println("");
+              Serial.print("NwkSKey: ");
+              for (size_t i=0; i<sizeof(nwkKey); ++i) {
+                      if (i != 0)
+                              Serial.print("-");
+                      printHex2(nwkKey[i]);
+              }
+              Serial.println();
+            }
             // Disable link check validation (automatically enabled
-            // during join, but not supported by TTN at this time).
-            LMIC_setLinkCheckMode(1);
+            // during join, but because slow data rates change max TX
+	    // size, we don't use it in this example.
+            LMIC_setLinkCheckMode(0);
             break;
-        case EV_RFU1:
-            Serial.println(F("EV_RFU1"));
-            break;
+        /*
+        || This event is defined but not used in the code. No
+        || point in wasting codespace on it.
+        ||
+        || case EV_RFU1:
+        ||     Serial.println(F("EV_RFU1"));
+        ||     break;
+        */
         case EV_JOIN_FAILED:
             Serial.println(F("EV_JOIN_FAILED"));
             break;
         case EV_REJOIN_FAILED:
             Serial.println(F("EV_REJOIN_FAILED"));
             break;
-            break;
         case EV_TXCOMPLETE:
-            #if defined OLED
-              dispOled(0, 0, "TX Complete !");
-            #endif
             Serial.println(F("EV_TXCOMPLETE (includes waiting for RX windows)"));
             if (LMIC.txrxFlags & TXRX_ACK)
               Serial.println(F("Received ack"));
             if (LMIC.dataLen) {
-              Serial.println(F("Received "));
-              Serial.println(LMIC.dataLen);
+              Serial.print(F("Received "));
+              Serial.print(LMIC.dataLen);
               Serial.println(F(" bytes of payload"));
             }
             // Schedule next transmission
@@ -173,8 +183,30 @@ void onEvent (ev_t ev) {
         case EV_LINK_ALIVE:
             Serial.println(F("EV_LINK_ALIVE"));
             break;
-         default:
-            Serial.println(F("Unknown event"));
+        /*
+        || This event is defined but not used in the code. No
+        || point in wasting codespace on it.
+        ||
+        || case EV_SCAN_FOUND:
+        ||    Serial.println(F("EV_SCAN_FOUND"));
+        ||    break;
+        */
+        case EV_TXSTART:
+            Serial.println(F("EV_TXSTART"));
+            break;
+        case EV_TXCANCELED:
+            Serial.println(F("EV_TXCANCELED"));
+            break;
+        case EV_RXSTART:
+            /* do not print anything -- it wrecks timing */
+            break;
+        case EV_JOIN_TXCOMPLETE:
+            Serial.println(F("EV_JOIN_TXCOMPLETE: no JoinAccept"));
+            break;
+
+        default:
+            Serial.print(F("Unknown event: "));
+            Serial.println((unsigned) ev);
             break;
     }
 }
@@ -191,23 +223,9 @@ void do_send(osjob_t* j){
     // Next TX is scheduled after TX_COMPLETE event.
 }
 
-
 void setup() {
-
-#if defined OLED
-  u8x8.begin();
-  u8x8.setFont(u8x8_font_chroma48medium8_r);
-  dispOled(0, 0, "Starting");
-  dispOled(0, 2, "ESP32 Lora",false);
-#endif
-
- while (! Serial);
- Serial.begin(115200);
-    while (millis() < 5000) {
-    Serial.print("millis() = "); Serial.println(millis());
-    delay(500);
-  }
-  Serial.println(F("Starting"));
+    Serial.begin(9600);
+    Serial.println(F("Starting"));
 
     #ifdef VCC_ENABLE
     // For Pinoccio Scout boards
@@ -220,13 +238,11 @@ void setup() {
     os_init();
     // Reset the MAC state. Session and pending data transfers will be discarded.
     LMIC_reset();
-    LMIC_setClockError(MAX_CLOCK_ERROR * 10 / 100);
 
     // Start job (sending automatically starts OTAA too)
     do_send(&sendjob);
 }
 
 void loop() {
- os_runloop_once();
-
+    os_runloop_once();
 }
